@@ -1,7 +1,7 @@
-"""vLLM implementation for llm4opt."""
+"""vLLM implementation."""
 
 import os
-from typing import Dict, List, Optional, Union, Any
+from typing import List, Optional, Union
 
 from llm4opt.llm.base import LLM
 
@@ -42,10 +42,7 @@ class VLLM(LLM):
             from vllm import LLM as VLLMModel
             from vllm import SamplingParams
         except ImportError:
-            raise ImportError(
-                "vLLM is not installed. Please install it with "
-                "`pip install vllm` to use the VLLM class."
-            )
+            raise ImportError("vLLM is not installed. Install with `pip install vllm`")
             
         self.SamplingParams = SamplingParams
         
@@ -106,9 +103,8 @@ class VLLM(LLM):
             The embedding as a list of floats.
             
         Raises:
-            NotImplementedError: vLLM doesn't natively support embeddings.
+            NotImplementedError: vLLM doesn't support embeddings. Use a dedicated embedding model instead.
         """
         raise NotImplementedError(
-            "vLLM doesn't natively support embeddings. "
-            "Consider using a dedicated embedding model or library like SentenceTransformers."
+            "vLLM doesn't support embeddings. Use a dedicated embedding model instead."
         )

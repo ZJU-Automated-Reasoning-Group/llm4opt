@@ -29,7 +29,8 @@ REQUIRED = [
     'torch>=2.0.0',
     'transformers>=4.30.0',
     'numpy>=1.24.0',
-    'setuptools>=65.0.0'
+    'setuptools>=65.0.0',
+    'zhipuai>=2.1.5',
 ]
 
 # The rest you shouldn't have to touch too much :)

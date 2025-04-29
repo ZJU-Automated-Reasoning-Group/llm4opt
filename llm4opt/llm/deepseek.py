@@ -1,47 +1,27 @@
-"""DeepSeek implementation for llm4opt."""
+"""DeepSeek implementation."""
 
 import os
-from typing import Dict, List, Optional, Union, Any
-
+from typing import List, Optional, Union
 import requests
 
 from llm4opt.llm.base import LLM
 
 
 class DeepSeek(LLM):
-    """DeepSeek implementation.
-    
-    This class implements the LLM interface using DeepSeek's API.
-    """
-    
     def __init__(self, 
                 model_name: str = "deepseek-coder",
                 api_key: Optional[str] = None,
                 api_base: Optional[str] = None,
                 **kwargs):
-        """Initialize the DeepSeek model.
-        
-        Args:
-            model_name: The name of the DeepSeek model to use (default: "deepseek-coder").
-            api_key: DeepSeek API key. If not provided, it will be read from the
-                     DEEPSEEK_API_KEY environment variable.
-            api_base: DeepSeek API base URL. If not provided, it will use the default.
-            **kwargs: Additional parameters to pass to the API.
-        """
         self.model_name = model_name
         
         # Set API key from parameter or environment variable
         self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
         if not self.api_key:
-            raise ValueError(
-                "DeepSeek API key is required. Either pass it as api_key parameter "
-                "or set the DEEPSEEK_API_KEY environment variable."
-            )
+            raise ValueError("DeepSeek API key required via api_key parameter or DEEPSEEK_API_KEY environment variable")
         
         # Set API base URL
         self.api_base = api_base or "https://api.deepseek.com/v1"
-        
-        # Store additional kwargs
         self.kwargs = kwargs
     
     def generate(self, 
@@ -50,19 +30,6 @@ class DeepSeek(LLM):
                 max_tokens: Optional[int] = None,
                 stop: Optional[Union[str, List[str]]] = None,
                 **kwargs) -> str:
-        """Generate text from DeepSeek based on the prompt.
-        
-        Args:
-            prompt: The prompt to generate text from.
-            temperature: Controls randomness. Higher values (e.g., 0.8) make output more random,
-                         lower values (e.g., 0.2) make it more deterministic.
-            max_tokens: Maximum number of tokens to generate.
-            stop: Sequences where the API will stop generating further tokens.
-            **kwargs: Additional parameters to pass to the DeepSeek API.
-            
-        Returns:
-            The generated text as a string.
-        """
         # Prepare the API endpoint
         endpoint = f"{self.api_base}/chat/completions"
         
@@ -99,15 +66,6 @@ class DeepSeek(LLM):
         return response_json["choices"][0]["message"]["content"].strip()
     
     def get_embedding(self, text: str, **kwargs) -> List[float]:
-        """Get the embedding for the given text using DeepSeek's embedding models.
-        
-        Args:
-            text: The text to get the embedding for.
-            **kwargs: Additional parameters to pass to the DeepSeek API.
-            
-        Returns:
-            The embedding as a list of floats.
-        """
         # Prepare the API endpoint
         endpoint = f"{self.api_base}/embeddings"
         

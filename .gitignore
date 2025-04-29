@@ -1,4 +1,5 @@
 .env
+*.egg-info*
 com.sh
 .cursorrules
 .cursorignore

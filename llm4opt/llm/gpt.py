@@ -1,7 +1,7 @@
-"""OpenAI GPT implementation for llm4opt."""
+"""OpenAI GPT implementation."""
 
 import os
-from typing import Dict, List, Optional, Union, Any
+from typing import List, Optional, Union
 
 import openai
 
@@ -35,8 +35,7 @@ class GPT(LLM):
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError(
-                "OpenAI API key is required. Either pass it as api_key parameter "
-                "or set the OPENAI_API_KEY environment variable."
+                "OpenAI API key is required. Set via api_key parameter or OPENAI_API_KEY environment variable."
             )
         
         # Set organization from parameter or environment variable
@@ -48,8 +47,6 @@ class GPT(LLM):
             client_kwargs["organization"] = self.organization
             
         self.client = openai.OpenAI(api_key=self.api_key, **client_kwargs)
-        
-        # Store additional kwargs
         self.kwargs = kwargs
     
     def generate(self, 
