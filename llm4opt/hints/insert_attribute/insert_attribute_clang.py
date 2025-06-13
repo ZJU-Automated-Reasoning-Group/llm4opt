@@ -1,3 +1,45 @@
+"""
+Clang/LLVM Attribute Insertion Tool for Compiler Testing
+
+This module implements a comprehensive testing framework for Clang/LLVM compiler optimization
+by automatically inserting various Clang-specific attributes into C programs. It's designed
+to discover compiler bugs, crashes, and optimization issues through systematic attribute
+injection and differential testing.
+
+Key Features:
+- Automatic parsing of C programs to identify insertion points (variables, functions, structs, loops)
+- Random insertion of Clang-specific attributes (LLVM optimization passes, alignment, etc.)
+- LLVM IR generation and optimization pass testing
+- Differential testing between different optimization levels
+- Crash detection and bug reporting with detailed logging
+- Support for both CSmith-generated and YARPGen test programs
+- Integration with LLVM opt tool for IR-level optimizations
+
+Main Components:
+1. RunTest class: Core testing logic for attribute insertion and compilation testing
+2. Attribute mapping: Maps Clang attribute names to their generation functions
+3. LLVM IR emission and optimization: Tests LLVM optimization passes
+4. Oracle compilation: Reference compilation for differential testing
+5. Bug detection: Identifies crashes, miscompilations, and runtime errors
+6. Logging system: Comprehensive logging of bugs, errors, and test information
+
+Clang-Specific Features:
+- Loop attribute insertion (clang_loop, etc.)
+- Struct-level attribute testing
+- LLVM optimization pass selection and testing
+- Integration with Clang's AST parsing capabilities
+
+Usage:
+    python insert_attribute_clang.py --compiler clang --test-type csmith --num-tests 1000
+
+The tool generates timestamped output directories containing:
+- crash/: Programs that caused compiler crashes
+- bug/: Programs that revealed compiler bugs
+- Detailed logs of all testing activities
+
+This is part of the LLM4OPT project for automated compiler testing and optimization.
+"""
+
 import multiprocessing
 import subprocess
 import datetime
@@ -25,11 +67,12 @@ from clang_attributes import *
 
 import pdb
 
+# Create timestamped output directories for Clang test results
 current_time = datetime.datetime.now()
 timestamp = current_time.strftime("%Y%m%d_%H%M%S")
 CUR_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), f'Arise-CLANG-{timestamp}')
-CRASH_DIR = os.path.join(CUR_DIR, 'crash')
-BUG_DIR = os.path.join(CUR_DIR, 'bug')
+CRASH_DIR = os.path.join(CUR_DIR, 'crash')  # Directory for programs that crash Clang
+BUG_DIR = os.path.join(CUR_DIR, 'bug')      # Directory for programs that reveal Clang bugs
 
 COMPILATION_TIMEOUT = 60
 RUN_TIMEOUT = 30
@@ -49,6 +92,8 @@ SAN_GCC = 'gcc'
 SAN_CLANG = 'clang'
 
 
+# Mapping of Clang-specific attribute names to their generation functions
+# This enables dynamic attribute creation based on program analysis for Clang/LLVM
 attribute_function_map = {
     'callable_when': form_callable_when,
     'asm': form_asm,

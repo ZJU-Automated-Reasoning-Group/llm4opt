@@ -1,5 +1,62 @@
+"""
+Compiler Optimization Flag Definitions and Management
 
+This module defines comprehensive sets of compiler optimization flags for different
+optimization levels in GCC and LLVM. It provides the foundation for testing
+compiler behavior across various optimization configurations and enables
+systematic exploration of optimization flag combinations.
 
+Key Components:
+
+1. GCC Optimization Levels:
+   - O0: No optimization (baseline)
+   - O1: Basic optimizations with minimal compilation time impact
+   - O2: Standard optimizations balancing performance and compilation time
+   - O3: Aggressive optimizations prioritizing performance over compilation time
+   - Os: Size optimization prioritizing code size reduction
+   - Additional experimental and advanced optimization flags
+
+2. Optimization Flag Categories:
+   - Basic optimizations: Dead code elimination, constant propagation, etc.
+   - Loop optimizations: Vectorization, unrolling, interchange, etc.
+   - Interprocedural optimizations: Inlining, constant propagation across functions
+   - Architecture-specific optimizations: Target-specific instruction selection
+   - Advanced optimizations: Profile-guided optimization, link-time optimization
+
+3. LLVM Optimization Passes:
+   - Individual LLVM optimization passes for fine-grained testing
+   - Pass ordering and dependency management
+   - Integration with LLVM's opt tool for IR-level optimization testing
+
+4. Optimization Set Operations:
+   - Set arithmetic for optimization flag combinations
+   - Exclusion and inclusion logic for compatible flag sets
+   - Random optimization flag selection for testing
+
+Usage:
+    This module is used by the attribute insertion testing framework to:
+    1. Define baseline optimization levels for differential testing
+    2. Generate random optimization flag combinations
+    3. Create optimization attributes for function-level optimization control
+    4. Support both GCC and LLVM optimization testing workflows
+
+The optimization flags defined here are used to:
+- Generate optimize() attributes with specific flag combinations
+- Test compiler behavior across different optimization levels
+- Identify optimization-related compiler bugs and miscompilations
+- Evaluate the interaction between attributes and optimization flags
+
+Example optimization sets:
+- option_O1: Basic optimizations enabled at -O1
+- option_O2: All optimizations enabled at -O2 (includes O1 + additional)
+- option_O3: Aggressive optimizations enabled at -O3 (includes O2 + additional)
+- llvm_opt_pass: Individual LLVM optimization passes
+
+Part of the LLM4OPT project for automated compiler testing and optimization.
+"""
+
+# GCC Optimization Level Definitions
+# These sets define which optimization flags are enabled at each standard optimization level
 
 option_O1 = set([
     '-fauto-inc-dec',

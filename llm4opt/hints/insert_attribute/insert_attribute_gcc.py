@@ -1,3 +1,37 @@
+"""
+GCC Attribute Insertion Tool for Compiler Testing
+
+This module implements a comprehensive testing framework for GCC compiler optimization
+by automatically inserting various GCC-specific attributes into C programs. It's designed
+to discover compiler bugs, crashes, and optimization issues through systematic attribute
+injection and differential testing.
+
+Key Features:
+- Automatic parsing of C programs to identify insertion points (variables, functions, structs)
+- Random insertion of GCC-specific attributes (optimization, alignment, sanitizer, etc.)
+- Differential testing between different optimization levels and compilers
+- Crash detection and bug reporting with detailed logging
+- Support for both CSmith-generated and YARPGen test programs
+- Sanitizer integration for runtime error detection
+
+Main Components:
+1. RunTest class: Core testing logic for attribute insertion and compilation testing
+2. Attribute mapping: Maps attribute names to their generation functions
+3. Oracle compilation: Reference compilation for differential testing  
+4. Bug detection: Identifies crashes, miscompilations, and runtime errors
+5. Logging system: Comprehensive logging of bugs, errors, and test information
+
+Usage:
+    python insert_attribute_gcc.py --compiler gcc --test-type csmith --num-tests 1000
+
+The tool generates timestamped output directories containing:
+- crash/: Programs that caused compiler crashes
+- bug/: Programs that revealed compiler bugs
+- Detailed logs of all testing activities
+
+This is part of the LLM4OPT project for automated compiler testing and optimization.
+"""
+
 import multiprocessing
 import subprocess
 import datetime
@@ -24,18 +58,20 @@ from gcc_attributes import *
 
 import pdb
 
+# Create timestamped output directories for test results
 current_time = datetime.datetime.now()
 timestamp = current_time.strftime("%Y%m%d_%H%M%S")
 CUR_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), f'Arise-GCC-{timestamp}')
-CRASH_DIR = os.path.join(CUR_DIR, 'crash')
-BUG_DIR = os.path.join(CUR_DIR, 'bug')
+CRASH_DIR = os.path.join(CUR_DIR, 'crash')  # Directory for programs that crash the compiler
+BUG_DIR = os.path.join(CUR_DIR, 'bug')      # Directory for programs that reveal bugs
 
-COMPILATION_TIMEOUT = 60
-RUN_TIMEOUT = 30
-SAN_COMPILE_TIMEOUT = 90
-CSMITH_HOME = '/home/compiler/csmith/runtime'
-MAX_NUM = 5000000
-MUTANT_NUM = 500
+# Timeout configurations for different operations
+COMPILATION_TIMEOUT = 60      # Timeout for compilation operations
+RUN_TIMEOUT = 30             # Timeout for program execution
+SAN_COMPILE_TIMEOUT = 90     # Timeout for sanitizer compilation (longer due to instrumentation)
+CSMITH_HOME = '/home/compiler/csmith/runtime'  # CSmith runtime library path
+MAX_NUM = 5000000            # Maximum number for random generation
+MUTANT_NUM = 500             # Number of mutants to generate per test case
 
 TEST_SUITE_DIR = '/home/compiler/gcc/gcc/testsuite'
 
@@ -45,6 +81,8 @@ CLANG_CRASH_INFO = 'please submit a bug report to'
 SAN_GCC = 'gcc'
 SAN_CLANG = 'clang'
 
+# Mapping of optimization levels to their enabled/disabled flag sets
+# Used for differential testing between optimization levels
 opt_set_map = {
     '-O0': utils.form_optimization_set(set(), optimization.option_O3),
     '-O1': utils.form_optimization_set(optimization.option_O1, optimization.option_O3 - optimization.option_O1),
@@ -63,6 +101,8 @@ opt_level_attributes = [
     'optimize ("Os")',
 ]
 
+# Mapping of attribute names to their generation functions
+# This enables dynamic attribute creation based on program analysis
 attribute_function_map = {
     'aligned': form_aligned,
     'nonstring': insert_nonstring,

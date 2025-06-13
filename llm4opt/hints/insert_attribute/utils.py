@@ -1,3 +1,44 @@
+"""
+Utility Functions for Compiler Attribute Testing Framework
+
+This module provides essential utility functions for the compiler attribute insertion
+testing framework. It contains helper functions for program parsing, compilation,
+execution, sanitizer integration, and test case generation.
+
+Key Functionality:
+1. Program Parsing: Extract structural information from C programs (variables, functions, structs)
+2. Compilation & Execution: Safe compilation and execution with timeout handling
+3. Test Case Generation: Integration with CSmith and YARPGen for test program generation
+4. Sanitizer Integration: Runtime error detection using various sanitizers
+5. File Operations: Code insertion, file manipulation, and temporary file management
+6. Process Management: Safe process execution with timeout and cleanup
+7. Optimization Handling: Compiler optimization flag management and selection
+
+Core Components:
+- parse_info(): Extracts program structure using custom parsing tools
+- run_cmd(): Safe command execution with timeout and error handling
+- gen_program(): CSmith-based test program generation
+- gen_yarpgen(): YARPGen-based test program generation
+- sanitize_check(): Runtime error detection using sanitizers
+- generate(): Code insertion and program mutation
+- Logging utilities for comprehensive test tracking
+
+Supported Tools:
+- CSmith: Random C program generator
+- YARPGen: Yet Another Random Program Generator
+- GCC/Clang parsing tools for structural analysis
+- Various sanitizers (AddressSanitizer, UBSan, etc.)
+
+This module serves as the foundation for both GCC and Clang attribute testing
+frameworks, providing common functionality needed for systematic compiler testing.
+
+Usage:
+    This module is imported by insert_attribute_gcc.py and insert_attribute_clang.py
+    and provides the core infrastructure for compiler testing operations.
+
+Part of the LLM4OPT project for automated compiler testing and optimization.
+"""
+
 import multiprocessing
 import subprocess
 import datetime
@@ -156,6 +197,20 @@ def parse_run_option(c_file):
         return '', options_value, org_options_value
 
 def parse_info(c_file, option, tmp_dir):
+    """
+    Parse C program to extract structural information (variables, functions, structs).
+    
+    Uses a custom GCC-based parsing tool to analyze the program structure and
+    identify potential insertion points for attributes.
+    
+    Args:
+        c_file: Path to the C source file to parse
+        option: Compilation options to use during parsing
+        tmp_dir: Temporary directory for intermediate files
+        
+    Returns:
+        List containing [struct_var_list, var_list, func_list] or None on failure
+    """
     log_file = f"{tmp_dir}/{os.path.basename(c_file).replace('.c', '.log')}"
     try:
         parse_cmd = f'timeout {PARSE_TIMEOUT} {parse_tool_gcc} {c_file}'
@@ -359,6 +414,20 @@ def kill_all(pid):
 
     
 def run_cmd(cmd, timeout, work_dir=None):
+    """
+    Execute a command with timeout and error handling.
+    
+    Safely executes shell commands with proper timeout handling, process cleanup,
+    and comprehensive error capture. Used for compilation, execution, and tool invocation.
+    
+    Args:
+        cmd: Command string to execute
+        timeout: Maximum execution time in seconds
+        work_dir: Working directory for command execution (optional)
+        
+    Returns:
+        Tuple of (return_code, stdout, stderr)
+    """
     # cmd = f'timeout {int(timeout) + 1} {cmd}'
     if type(cmd) is not list:
         cmd = cmd.split(' ')
@@ -591,6 +660,19 @@ def sanitize_check(src_file, comp_option, tmp_dir):
         return -1
 
 def generate(insert_plan, refine_list, org_file, new_file):
+    """
+    Generate a new C program with attributes inserted at specified locations.
+    
+    Takes an insertion plan (mapping line numbers to attribute insertions) and
+    creates a modified version of the original program with attributes inserted
+    at the appropriate locations.
+    
+    Args:
+        insert_plan: Dictionary mapping line numbers to list of [column, attribute] pairs
+        refine_list: Additional refinements to apply during insertion
+        org_file: Path to original C source file
+        new_file: Path where modified file should be written
+    """
     line_cnt = 0
     new_prog = ''
     with open(org_file, 'r') as f:

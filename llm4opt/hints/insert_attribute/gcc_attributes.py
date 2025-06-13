@@ -1,16 +1,84 @@
+"""
+GCC-Specific Attribute Definitions and Generation Functions
+
+This module defines GCC-specific attributes and provides functions to generate
+properly formatted attribute strings for insertion into C programs. It supports
+a comprehensive set of GCC attributes across different categories including
+variable attributes, function attributes, and struct attributes.
+
+Key Components:
+
+1. Attribute Categories:
+   - struct_related_attributes: Attributes applicable to struct members and variables
+   - variable_related_attributes: Attributes for global and local variables  
+   - function_related_attributes: Attributes for function declarations
+   - function_optimize_attributes: Optimization-level attributes for functions
+   - inline_attributes: Function inlining control attributes
+
+2. Attribute Generation Functions:
+   - Form properly formatted __attribute__((...)) strings
+   - Handle attribute parameters and syntax variations
+   - Validate attribute applicability based on context (type, scope, etc.)
+   - Generate random but valid attribute parameters
+
+3. Context-Aware Attribute Generation:
+   - form_aligned(): Memory alignment attributes with valid alignment values
+   - form_alloc_size(): Function allocation size hints based on parameters
+   - form_vector_size(): Vector type size attributes
+   - form_mode(): Variable mode attributes for different data types
+   - form_access(): Function parameter access patterns
+   - And many more specialized attribute generators
+
+4. Attribute-Option Relationships:
+   - Maps attributes to their corresponding compiler options
+   - Ensures attributes are only used when relevant compiler flags are active
+   - Supports conditional attribute insertion based on compilation context
+
+Key Features:
+- Type-aware attribute generation (only applies attributes to compatible types)
+- Parameter validation (ensures attribute parameters are syntactically correct)
+- Random parameter generation within valid ranges
+- Support for both simple and complex attribute syntax
+- Integration with GCC's extensive attribute system
+
+Supported Attribute Types:
+- Memory alignment and layout control
+- Function optimization and inlining hints
+- Parameter and return value annotations
+- Visibility and linkage control
+- Target-specific optimizations
+- Sanitizer control attributes
+- Stack and security attributes
+
+Usage:
+    This module is used by insert_attribute_gcc.py to:
+    1. Select appropriate attributes for different program elements
+    2. Generate syntactically correct attribute strings
+    3. Ensure type compatibility and parameter validity
+    4. Support systematic testing of GCC's attribute system
+
+The attribute_function_map dictionary maps attribute names to their
+corresponding generation functions, enabling dynamic attribute creation
+based on program analysis results.
+
+Part of the LLM4OPT project for automated compiler testing and optimization.
+"""
+
 import random
 import string
 import re
 
+# Attributes that can be applied to struct members and variables
+# These control memory layout, alignment, and compiler warnings
 struct_related_attributes = [
-    'aligned',
-    'nonstring',
-    'packed',
-    'strict_flex_array',
-    # 'unavailable',
-    'unused',
-    'vector_size',
-    'warn_if_not_aligned'
+    'aligned',              # Control memory alignment
+    'nonstring',           # Indicate non-null-terminated character arrays
+    'packed',              # Pack struct members tightly
+    'strict_flex_array',   # Control flexible array member behavior
+    # 'unavailable',       # Mark as unavailable (commented out for testing)
+    'unused',              # Suppress unused variable warnings
+    'vector_size',         # Specify vector type size
+    'warn_if_not_aligned'  # Warn if not properly aligned
 ]
 
 variable_related_attributes = [
@@ -53,59 +121,61 @@ inline_attributes = [
     'noinline',
 ]
 
+# Attributes that can be applied to function declarations
+# These control function optimization, behavior, and compiler analysis
 function_related_attributes = [
-    'access',
-    'aligned',
-    'alloc_align',
-    # 'always_inline',
-    'artificial',
-    'assume_aligned',
-    'alloc_align',
-    'alloc_size',
-    'cold',
-    'const',
-    'constructor',
-    'destructor',
-    'deprecated',
-    'externally_visible',
-    'flatten',
-    'gnu_inline',
-    'hot',
-    'leaf',
-    'malloc',
-    'no_icf',
-    'no_profile_instrument_function',
-    'no_reorder',
-    'no_stack_protector',
-    'noclone',
-    # 'noinline',
-    'noipa',
-    'nonnull',
-    'noplt',
-    'noreturn',
-    'nothrow',
-    'patchable_function_entry',
-    'pure',
-    'retain',
-    'returns_nonnull',
-    'returns_twice',
-    'sentinel',
-    'smid',
-    'target',
-    'target_clones',
-    # 'unavailable',
-    'unused',
-    'used',
-    # 'visibility',
-    'warn_unused_result',
-    # 'weak',
-    # 'weakref',
-    'expected_throw',
-    'no_instrument_function',
-    'no_split_stack',
-    'no_stack_limit',
-    'stack_protect',
-    'tainted_args',
+    'access',                        # Specify parameter access patterns
+    'aligned',                       # Function alignment requirements
+    'alloc_align',                   # Allocation alignment hints
+    # 'always_inline',               # Force inlining (handled separately)
+    'artificial',                    # Mark as compiler-generated
+    'assume_aligned',                # Assume parameter alignment
+    'alloc_align',                   # Duplicate entry (should be cleaned up)
+    'alloc_size',                    # Allocation size hints
+    'cold',                          # Rarely executed function
+    'const',                         # No side effects, no global memory access
+    'constructor',                   # Run before main()
+    'destructor',                    # Run after main()
+    'deprecated',                    # Mark as deprecated
+    'externally_visible',            # Force external visibility
+    'flatten',                       # Inline all called functions
+    'gnu_inline',                    # Use GNU inline semantics
+    'hot',                           # Frequently executed function
+    'leaf',                          # Function doesn't call other functions
+    'malloc',                        # Returns newly allocated memory
+    'no_icf',                        # Disable identical code folding
+    'no_profile_instrument_function', # Disable profiling instrumentation
+    'no_reorder',                    # Don't reorder with other functions
+    'no_stack_protector',            # Disable stack protection
+    'noclone',                       # Disable function cloning
+    # 'noinline',                    # Prevent inlining (handled separately)
+    'noipa',                         # No interprocedural analysis
+    'nonnull',                       # Parameters must not be NULL
+    'noplt',                         # Don't use PLT for calls
+    'noreturn',                      # Function never returns
+    'nothrow',                       # Function doesn't throw exceptions
+    'patchable_function_entry',      # Patchable function entry point
+    'pure',                          # No side effects, may read global memory
+    'retain',                        # Don't eliminate unused function
+    'returns_nonnull',               # Return value is never NULL
+    'returns_twice',                 # Function may return multiple times
+    'sentinel',                      # Variadic function sentinel
+    'smid',                          # SIMD function variant
+    'target',                        # Target-specific optimization
+    'target_clones',                 # Generate multiple target variants
+    # 'unavailable',                 # Mark as unavailable
+    'unused',                        # Suppress unused function warnings
+    'used',                          # Force function to be emitted
+    # 'visibility',                  # Control symbol visibility
+    'warn_unused_result',            # Warn if return value unused
+    # 'weak',                        # Weak symbol
+    # 'weakref',                     # Weak reference
+    'expected_throw',                # Control flow hardening
+    'no_instrument_function',        # Disable function instrumentation
+    'no_split_stack',                # Disable split stack
+    'no_stack_limit',                # Disable stack limit checking
+    'stack_protect',                 # Enable stack protection
+    'tainted_args',                  # Mark arguments as tainted
 ]
 
 # attribute_related_functions_option = {
@@ -132,6 +202,18 @@ function_related_attributes_option = {
 
 
 def form_aligned(info):
+    """
+    Generate an aligned attribute with a valid alignment value.
+    
+    Selects from common alignment values that are powers of 2 or
+    the compiler's maximum alignment constant.
+    
+    Args:
+        info: Dictionary containing variable/function information
+        
+    Returns:
+        String containing the formatted aligned attribute
+    """
     num_candidate = ['4', '8', '16', '32', '64', '__BIGGEST_ALIGNMENT__']
     num = random.choice(num_candidate)
     return f'__attribute__((aligned({num})))'

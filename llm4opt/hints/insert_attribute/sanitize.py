@@ -1,3 +1,53 @@
+"""
+Sanitizer Configuration and Attribute Mapping
+
+This module defines sanitizer configurations and their corresponding attributes
+for both GCC and Clang/LLVM compilers. It provides functionality to select
+compatible sanitizer combinations and generate appropriate no_sanitize attributes
+for testing compiler behavior with different sanitizer configurations.
+
+Key Components:
+
+1. GCC Sanitizers:
+   - AddressSanitizer (ASan): Memory error detection
+   - ThreadSanitizer (TSan): Data race detection  
+   - UndefinedBehaviorSanitizer (UBSan): Undefined behavior detection
+   - LeakSanitizer: Memory leak detection
+   - Various UBSan sub-sanitizers for specific undefined behaviors
+
+2. LLVM/Clang Sanitizers:
+   - Similar to GCC but with some differences in naming and availability
+   - DataFlowSanitizer: Information flow tracking
+   - MemorySanitizer: Uninitialized memory access detection
+   - SafeStack: Stack buffer overflow protection
+
+3. Sanitizer Exclusion Rules:
+   - ThreadSanitizer is incompatible with AddressSanitizer and LeakSanitizer
+   - MemorySanitizer is incompatible with AddressSanitizer and ThreadSanitizer
+   - Automatic handling of mutually exclusive sanitizer combinations
+
+4. Attribute Generation:
+   - Maps sanitizer flags to corresponding no_sanitize attributes
+   - Supports both GCC and Clang attribute syntax variations
+   - Random selection of compatible sanitizer combinations
+
+Functions:
+- choose_gcc_sanitize(): Selects compatible GCC sanitizers and generates attributes
+- choose_llvm_sanitize(): Selects compatible LLVM sanitizers and generates attributes
+
+Usage:
+    This module is used by the attribute insertion testing framework to:
+    1. Generate random sanitizer combinations for testing
+    2. Create corresponding no_sanitize attributes for selective disabling
+    3. Ensure sanitizer compatibility to avoid compilation errors
+
+The sanitizer attributes generated here are inserted into test programs to
+evaluate compiler behavior when sanitizers are selectively disabled on
+specific functions or variables.
+
+Part of the LLM4OPT project for automated compiler testing and optimization.
+"""
+
 import random
 
 gcc_san = [
