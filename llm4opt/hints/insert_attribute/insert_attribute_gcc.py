@@ -1,45 +1,47 @@
 """
-GCC Attribute Insertion Tool for Compiler Testing
+GCC Attribute Performance Evaluation Framework
 
-This module implements a comprehensive testing framework for GCC compiler optimization
-by automatically inserting various GCC-specific attributes into C programs. It's designed
-to discover compiler bugs, crashes, and optimization issues through systematic attribute
-injection and differential testing.
+This module implements a performance evaluation framework for GCC compiler attributes,
+focusing on measuring the impact of semantics-preserving attributes on program performance.
+It's designed to systematically evaluate and record the performance effects of different
+attribute combinations.
 
 Key Features:
-- Automatic parsing of C programs to identify insertion points (variables, functions, structs)
-- Random insertion of GCC-specific attributes (optimization, alignment, sanitizer, etc.)
-- Differential testing between different optimization levels and compilers
-- Crash detection and bug reporting with detailed logging
-- Support for both CSmith-generated and YARPGen test programs
-- Sanitizer integration for runtime error detection
+- Performance benchmarking of programs with and without attributes
+- Focus on semantics-preserving attributes (alignment, optimization hints, etc.)
+- Systematic evaluation of attribute combinations and their performance impact
+- Comprehensive performance metrics collection (execution time, code size, etc.)
+- Structured data output for analysis
 
 Main Components:
-1. RunTest class: Core testing logic for attribute insertion and compilation testing
-2. Attribute mapping: Maps attribute names to their generation functions
-3. Oracle compilation: Reference compilation for differential testing  
-4. Bug detection: Identifies crashes, miscompilations, and runtime errors
-5. Logging system: Comprehensive logging of bugs, errors, and test information
+1. PerformanceEvaluator class: Core logic for attribute insertion and performance measurement
+2. Attribute selection: Heuristic-based attribute selection for different program patterns
+3. Benchmark execution: Controlled performance measurement with statistical significance
+4. Data recording: Structured performance data for analysis
+
+Performance-Focused Attributes:
+- Optimization attributes: optimize(), hot, cold, flatten
+- Alignment attributes: aligned, assume_aligned
+- Inlining hints: always_inline, noinline
+- Memory attributes: malloc, returns_nonnull, restrict-like attributes
+- Target-specific optimizations: target, target_clones
 
 Usage:
-    python insert_attribute_gcc.py --compiler gcc --test-type csmith --num-tests 1000
+    python insert_attribute_gcc.py --benchmark-suite /path/to/programs
 
-The tool generates timestamped output directories containing:
-- crash/: Programs that caused compiler crashes
-- bug/: Programs that revealed compiler bugs
-- Detailed logs of all testing activities
+Data Output:
+- performance_data/: Structured performance measurements
+- benchmarks/: Performance comparison results
 
-This is part of the LLM4OPT project for automated compiler testing and optimization.
+This is part of the LLM4OPT project for compiler optimization evaluation.
 """
 
 import multiprocessing
 import subprocess
 import datetime
 import tempfile
-import logging
 import random
 import shutil
-import signal
 import glob
 import time
 import os
@@ -47,502 +49,340 @@ import re
 import utils
 import argparse
 from functools import partial
-
 import itertools
 import string
 from pathlib import Path
+import json
+import statistics
 
-import sanitize
 import optimization
 from gcc_attributes import *
 
-import pdb
-
-# Create timestamped output directories for test results
+# Create timestamped output directories for performance evaluation results
 current_time = datetime.datetime.now()
 timestamp = current_time.strftime("%Y%m%d_%H%M%S")
-CUR_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), f'Arise-GCC-{timestamp}')
-CRASH_DIR = os.path.join(CUR_DIR, 'crash')  # Directory for programs that crash the compiler
-BUG_DIR = os.path.join(CUR_DIR, 'bug')      # Directory for programs that reveal bugs
+CUR_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), f'Performance-GCC-{timestamp}')
+PERFORMANCE_DIR = os.path.join(CUR_DIR, 'performance_data')  # Directory for performance measurements
+BENCHMARKS_DIR = os.path.join(CUR_DIR, 'benchmarks')         # Directory for benchmark results
 
-# Timeout configurations for different operations
-COMPILATION_TIMEOUT = 60      # Timeout for compilation operations
-RUN_TIMEOUT = 30             # Timeout for program execution
-SAN_COMPILE_TIMEOUT = 90     # Timeout for sanitizer compilation (longer due to instrumentation)
-CSMITH_HOME = '/home/compiler/csmith/runtime'  # CSmith runtime library path
-MAX_NUM = 5000000            # Maximum number for random generation
-MUTANT_NUM = 500             # Number of mutants to generate per test case
+# Performance measurement configurations
+BENCHMARK_TIMEOUT = 300       # Timeout for benchmark execution (longer for accurate measurements)
+WARMUP_RUNS = 3              # Number of warmup runs before measurement
+MEASUREMENT_RUNS = 10        # Number of measurement runs for statistical significance
+COMPILATION_TIMEOUT = 60     # Timeout for compilation operations
 
-TEST_SUITE_DIR = '/home/compiler/gcc/gcc/testsuite'
-
-GCC_CRASH_INFO = 'please submit a full bug report'
-CLANG_CRASH_INFO = 'please submit a bug report to'
-
-SAN_GCC = 'gcc'
-SAN_CLANG = 'clang'
-
-# Mapping of optimization levels to their enabled/disabled flag sets
-# Used for differential testing between optimization levels
-opt_set_map = {
-    '-O0': utils.form_optimization_set(set(), optimization.option_O3),
-    '-O1': utils.form_optimization_set(optimization.option_O1, optimization.option_O3 - optimization.option_O1),
-    '-O2': utils.form_optimization_set(optimization.option_O2, optimization.option_O3 - optimization.option_O2),
-    '-Os': utils.form_optimization_set(optimization.option_Os, optimization.option_O3 - optimization.option_Os),
-    '-O3': utils.form_optimization_set(optimization.option_O3, set()),
+# Performance-focused attributes that are semantics-preserving
+# These attributes can impact performance without changing program behavior
+performance_attributes = {
+    'optimization': [
+        'hot', 'cold', 'flatten'
+    ],
+    'alignment': [
+        'aligned(4)', 'aligned(8)', 'aligned(16)', 'aligned(32)', 'aligned(64)'
+    ],
+    'inlining': [
+        'always_inline', 'noinline', 'gnu_inline'
+    ],
+    'memory': [
+        'malloc', 'returns_nonnull', 'pure', 'const', 'leaf'
+    ],
+    'function_behavior': [
+        'artificial', 'externally_visible', 'no_reorder'
+    ]
 }
 
-opt_attributes = [f'optimize("{_}")' for _ in optimization.all_optimization]
+# Flatten all performance attributes for easy access
+all_performance_attributes = []
+for category, attrs in performance_attributes.items():
+    all_performance_attributes.extend(attrs)
 
-opt_level_attributes = [
-    'optimize (0)',
-    'optimize (1)',
-    'optimize (2)',
-    'optimize (3)',
-    'optimize ("Os")',
-]
+def generate_random_string(length):
+    return ''.join(random.choice(string.ascii_uppercase + string.ascii_lowercase + string.digits) for _ in range(length))
 
-# Mapping of attribute names to their generation functions
-# This enables dynamic attribute creation based on program analysis
-attribute_function_map = {
-    'aligned': form_aligned,
-    'nonstring': insert_nonstring,
-    'strict_flex_array': form_strict_flex_array,
-    'vector_size': form_vector_size,
-    'warn_if_not_aligned': form_warn_if_not_aligned,
-    'mode': form_mode,
-    'visibility': form_visibility,
-    'access': form_access,
-    'alloc_size': form_alloc_size,
-    'alloc_align': form_alloc_align,
-    'assume_aligned': form_assume_aligned,
-    'nonnull': form_nonnull,
-    'noreturn': form_noreturn,
-    'null_terminated_string_arg': form_null_terminated_string_arg,
-    'returns_nonnull': form_returns_nonnull,
-    'sentinel': form_sentinel,
-    'target': form_target,
-    'target_clones': form_target_clones,
-    'zero_call_used_regs': form_zero_call_used_regs,
-    'tls_model': insert_tls_model
-}
-
-def generate_random_string(len):
-    return ''.join(random.choice(string.ascii_uppercase + string.ascii_lowercase + string.digits) for _ in range(len))
-
-def sanitize_check(prog, work_dir):
-    out_file = f'{work_dir}/san.o'
-    comp_cmd = f'{SAN_GCC} -w -O0 -fsanitize=undefined,address,leak {prog} -o {out_file}'
-    comp_res = utils.run_cmd(comp_cmd, SAN_COMPILE_TIMEOUT)
-    if comp_res[0] != 0:
-        return -1
-
-    gcc_run_res = utils.run_cmd(out_file, RUN_TIMEOUT)
-    if ('runtime error:' in gcc_run_res[1]) or ('runtime error:' in gcc_run_res[2]):
-        return -1
-    comp_cmd = f'{SAN_CLANG} -w -O0 -fsanitize=undefined,address {prog} -o {out_file}'
-    comp_res = utils.run_cmd(comp_cmd, SAN_COMPILE_TIMEOUT)
-    if comp_res[0] != 0:
-        return -1
-
-    clang_run_res = utils.run_cmd(out_file, RUN_TIMEOUT)
-    if ('runtime error:' in clang_run_res[1]) or ('runtime error:' in clang_run_res[2]):
-        return -1
+class PerformanceEvaluator(object):
+    """
+    Core class for evaluating the performance impact of GCC attributes.
     
-    if gcc_run_res[0] != clang_run_res[0]:
-        return -1
-
-def write_bug_desc_to_file(to_file, data):
-    datas = data.split('\n')
-    with open(to_file, "a") as f:
-        for _ in datas:
-            f.write(f"/* {_} */\n")
-
-def get_logger(log_dir, name):
-    if not os.path.exists(CUR_DIR):
-        os.mkdir(CUR_DIR)
-        
-    logger = logging.getLogger(name)
-    filename = f'{log_dir}/{name}.log'
-    fh = logging.FileHandler(filename, mode='w+', encoding='utf-8')
-    formatter = logging.Formatter('%(levelname)s:\n%(message)s')
-    logger.setLevel(logging.DEBUG)
-    fh.setFormatter(formatter)
-    logger.addHandler(fh)
-    return logger
-
-bug_logger = get_logger(CUR_DIR, 'BUG')
-err_logger = get_logger(CUR_DIR, 'ERR')
-info_logger = get_logger(CUR_DIR, 'INFO')
-
-know_bug = set()
-
-class RunTest(object):
-    def __init__(self, prog, pre, opt, org_opt, link_dir, work_dir):
+    This class handles:
+    - Program analysis and attribute insertion
+    - Performance measurement and benchmarking
+    - Data recording for analysis
+    """
+    def __init__(self, prog, optimization_level, work_dir):
         self.prog = prog
-        self.pre = pre
-        self.opt = opt
-        self.org_opt = org_opt
-        self.link_dir = link_dir
+        self.optimization_level = optimization_level
         self.work_dir = work_dir
 
-        self.strut_var_list = []
+        # Program structure information
+        self.struct_var_list = []
         self.var_list = []
         self.func_list = []
-        self.refine_list = {}
-
-        self.case_list = {}
-        self.invalid_cnt = 0
     
-    def pre_run(self, comp):
-        pre_comp = self.get_oracle(comp, f'{self.org_opt}', self.prog)
-        if pre_comp[0] !=  0:
-            err_logger.error(f'[Pre Compilation Error]: {self.prog}\n')
-            return -1
+    def select_attributes_heuristic(self):
+        """
+        Select attributes based on program characteristics using heuristics.
+        
+        Returns:
+            Dictionary mapping program locations to recommended attributes
+        """
+        attribute_plan = {}
+        
+        # Select attributes based on program patterns
+        for func in self.func_list:
+            line = int(func.get('Line', 0))
+            if line == 0:
+                continue
+                
+            func_name = func.get('Name', '')
+            
+            # Skip main function
+            if func_name == 'main':
+                continue
+            
+            # Heuristic: small functions -> always_inline
+            if len(func_name) < 8:
+                if line not in attribute_plan:
+                    attribute_plan[line] = []
+                attribute_plan[line].append([int(func.get('Column', 1)), '__attribute__((always_inline))'])
+            
+            # Heuristic: functions with 'compute' or 'calc' -> hot
+            elif any(keyword in func_name.lower() for keyword in ['compute', 'calc', 'process', 'sum']):
+                if line not in attribute_plan:
+                    attribute_plan[line] = []
+                attribute_plan[line].append([int(func.get('Column', 1)), '__attribute__((hot))'])
+            
+            # Heuristic: functions with 'init' or 'setup' -> cold
+            elif any(keyword in func_name.lower() for keyword in ['init', 'setup', 'cleanup']):
+                if line not in attribute_plan:
+                    attribute_plan[line] = []
+                attribute_plan[line].append([int(func.get('Column', 1)), '__attribute__((cold))'])
+        
+        return attribute_plan
+    
+    def measure_performance(self, executable, runs=MEASUREMENT_RUNS):
+        """
+        Measure performance of an executable with statistical significance.
+        
+        Args:
+            executable: Path to the executable to benchmark
+            runs: Number of measurement runs
+            
+        Returns:
+            Dictionary with performance metrics (time, memory, etc.)
+        """
+        execution_times = []
+        
+        # Warmup runs
+        for _ in range(WARMUP_RUNS):
+            utils.run_cmd(executable, BENCHMARK_TIMEOUT, self.work_dir)
+        
+        # Measurement runs
+        for _ in range(runs):
+            start_time = time.perf_counter()
+            result = utils.run_cmd(executable, BENCHMARK_TIMEOUT, self.work_dir)
+            end_time = time.perf_counter()
+            
+            if result[0] == 0:  # Successful execution
+                execution_times.append(end_time - start_time)
+        
+        if not execution_times:
+            return None
+            
+        return {
+            'mean_time': statistics.mean(execution_times),
+            'median_time': statistics.median(execution_times),
+            'std_dev': statistics.stdev(execution_times) if len(execution_times) > 1 else 0,
+            'min_time': min(execution_times),
+            'max_time': max(execution_times),
+            'sample_count': len(execution_times)
+        }
+    
+    def evaluate_attribute_impact(self, attribute_plan):
+        """
+        Evaluate the performance impact of applying specific attributes.
+        
+        Args:
+            attribute_plan: Dictionary mapping locations to attributes
+            
+        Returns:
+            Performance comparison results
+        """
+        # Compile baseline version
+        baseline_exe = f'{self.work_dir}/baseline.exe'
+        baseline_cmd = f'gcc -O{self.optimization_level} {self.prog} -o {baseline_exe}'
+        baseline_result = utils.run_cmd(baseline_cmd, COMPILATION_TIMEOUT, self.work_dir)
+        
+        if baseline_result[0] != 0:
+            return None
+            
+        # Measure baseline performance
+        baseline_perf = self.measure_performance(baseline_exe)
+        if not baseline_perf:
+            return None
+            
+        # Create attributed version
+        attributed_prog = f'{self.work_dir}/attributed.c'
+        utils.generate_new(attribute_plan, self.prog, attributed_prog)
+        
+        # Compile attributed version
+        attributed_exe = f'{self.work_dir}/attributed.exe'
+        attributed_cmd = f'gcc -O{self.optimization_level} {attributed_prog} -o {attributed_exe}'
+        attributed_result = utils.run_cmd(attributed_cmd, COMPILATION_TIMEOUT, self.work_dir)
+        
+        if attributed_result[0] != 0:
+            return None
+            
+        # Measure attributed performance
+        attributed_perf = self.measure_performance(attributed_exe)
+        if not attributed_perf:
+            return None
+            
+        # Calculate improvement
+        speedup = baseline_perf['mean_time'] / attributed_perf['mean_time']
+        
+        return {
+            'baseline': baseline_perf,
+            'attributed': attributed_perf,
+            'speedup': speedup,
+            'improvement_percent': (speedup - 1.0) * 100,
+            'attributes_used': attribute_plan
+        }
+    
+    def parse_program_structure(self):
+        """Parse program structure and validate compilation."""
+        # Test basic compilation
+        test_cmd = f'gcc -O{self.optimization_level} {self.prog} -o /tmp/test_compile'
+        test_result = utils.run_cmd(test_cmd, COMPILATION_TIMEOUT, self.work_dir)
+        if test_result[0] != 0:
+            return False
 
-        parse_options = f'-I{self.link_dir} {self.org_opt}' 
+        # Parse program structure
+        parse_options = f'-O{self.optimization_level}' 
         ret_info = utils.parse_info(self.prog, parse_options, self.work_dir)
         if not ret_info:
-            err_logger.error(f'[Parse Error]: {self.prog}\n')
-            return -1
-        [self.strut_var_list, self.var_list, self.func_list] = ret_info
+            return False
+        [self.struct_var_list, self.var_list, self.func_list] = ret_info
+        return True
 
-    def form_insert_plan(self):
-        insert_plan = {}
-        for struct_var in self.strut_var_list:
-            inserted = random.randint(0, 9)
-            if inserted < 2:
-                continue
-            chose_attributes = random.choice(struct_related_attributes)
-            attribute_code = ''
-            if chose_attributes in attribute_function_map.keys():
-                form_function = attribute_function_map[chose_attributes]
-                # print(chose_attributes, form_function)
-                attribute_code = form_function(struct_var)
-                if not attribute_code:
-                    continue
-            else:
-                attribute_code = f'__attribute__(({chose_attributes}))'
-            if not struct_var['Line'].isdigit():
-                continue
-            if int(struct_var['Line']) not in insert_plan.keys():
-                insert_plan[int(struct_var['Line'])] = [[int(struct_var['Column']), attribute_code]]
-            else:
-                insert_plan[int(struct_var['Line'])].append([int(struct_var['Column']), attribute_code])
+def evaluate_performance(program_path, optimization_level, work_dir):
+    """
+    Main function to evaluate performance impact of attributes on a program.
+    
+    Args:
+        program_path: Path to the C program to evaluate
+        optimization_level: GCC optimization level (0, 1, 2, 3, s)
+        work_dir: Working directory for temporary files
+        
+    Returns:
+        Performance evaluation results
+    """
+    # Create performance evaluator
+    evaluator = PerformanceEvaluator(program_path, optimization_level, work_dir)
+    
+    # Parse program structure
+    if not evaluator.parse_program_structure():
+        return None
+    
+    # Select attributes using heuristics
+    attribute_plan = evaluator.select_attributes_heuristic()
+    
+    # Skip if no attributes to apply
+    if not attribute_plan:
+        return None
+    
+    # Evaluate performance impact
+    results = evaluator.evaluate_attribute_impact(attribute_plan)
+    
+    return {
+        'program': program_path,
+        'optimization_level': optimization_level,
+        'function_count': len(evaluator.func_list),
+        'variable_count': len(evaluator.var_list),
+        'results': results
+    }
 
-        for var in self.var_list:
-            if 'Local' in var['Scope']:
-                continue
-            if var['Line'] == '0' and var['Column'] == '0' and var['endColumn'] == '0':
-                continue
-            inserted = random.randint(0, 9)
-            if inserted < 4:
-                continue
-            chose_attributes = random.choice(variable_related_attributes)
-            attribute_code = ''
-            if chose_attributes in attribute_function_map.keys():
-                form_function = attribute_function_map[chose_attributes]
-                # print(chose_attributes, form_function)
-                attribute_code = form_function(var)
-                if not attribute_code:
-                    continue
-            else:
-                attribute_code = f'__attribute__(({chose_attributes}))'
-            if not var['Line'].isdigit():
-                continue
-            if int(var['Line']) not in insert_plan.keys():
-                insert_plan[int(var['Line'])] = [[int(var['Column']), int(var['endColumn']), attribute_code]]
-            else:
-                insert_plan[int(var['Line'])].append([int(var['Column']), int(var['endColumn']), attribute_code])
-
-        attr_option_map, san_attr_list = sanitize.choose_gcc_sanitize()
-        option_list = []
-        for func in self.func_list:
-            if func['Definition'].strip() == 'main':
-                continue
-            all_attributes = function_related_attributes + san_attr_list
-            chose_opt_attributes = random.sample(opt_attributes, random.randint(3,8))
-            chose_attributes = random.sample(all_attributes, random.randint(2,5))
-            inline_attr = random.choice(inline_attributes)
-            chose_attributes = chose_attributes + chose_opt_attributes
-            chose_attributes.append(inline_attr)
+def run_performance_benchmark(benchmark_suite, optimization_levels=['2']):
+    """
+    Run performance benchmarks on a suite of programs.
+    
+    Args:
+        benchmark_suite: List of program paths or directory containing programs
+        optimization_levels: List of optimization levels to test
+        
+    Returns:
+        Comprehensive benchmark results
+    """
+    # Create output directories
+    os.makedirs(PERFORMANCE_DIR, exist_ok=True)
+    os.makedirs(BENCHMARKS_DIR, exist_ok=True)
+    
+    all_results = []
+    
+    # Process each program in the benchmark suite
+    for program in benchmark_suite:
+        if not os.path.exists(program):
+            continue
             
-            attribute_code = ''
-            for chose_attribute in chose_attributes:
-                if chose_attribute in attribute_function_map.keys():
-                    form_function = attribute_function_map[chose_attribute]
-                    # print(chose_attributes, form_function)
-                    code = form_function(func)
-                    if code:
-                        attribute_code += f' {code}'
-                else:
-                    attribute_code += f' __attribute__(({chose_attribute}))'
-                if chose_attribute in function_related_attributes_option.keys():
-                    options = function_related_attributes_option[chose_attribute]
-                    if not isinstance(options, str):
-                        options = random.choice(options)
-                    option_list.append(options)
-                if chose_attribute in attr_option_map.keys():
-                    option_list.append(attr_option_map[chose_attribute])
-            if not func['Line'].isdigit():
-                continue
-            if int(func['Line']) not in insert_plan.keys():
-                insert_plan[int(func['Line'])] = [[int(func['Column']), attribute_code]]
-            else:
-                insert_plan[int(func['Line'])].append([int(func['Column']), attribute_code])
-
-        return insert_plan, option_list
-
-    def insert_attribute(self):
-        base_name = os.path.basename(self.prog)
-        insert_nums = MUTANT_NUM
-        for index in range(insert_nums):
-            file_name, ext = os.path.splitext(base_name)
-            new_base_name = f'{file_name}+insert{index}{ext}'
-            new_test_case = f'{self.work_dir}/{new_base_name}'
-            insert_plan, option_list = self.form_insert_plan()
-            if not insert_plan:
-                continue
-            utils.generate(insert_plan, self.refine_list, self.prog, new_test_case)
-            # utils.generate_new(insert_plan, self.prog, new_test_case)
-            options = ' '.join(list(option_list))
-            self.case_list[new_test_case] = options
-    
-    def insert_optimize_attribute(self):
-        insert_plan = {}
-        option_list = []
-        func_num = len(self.func_list)
-        main_idx = 0
-        for func in self.func_list:
-            if func['Definition'].strip() == 'main':
-                func_num -= 1
-                self.func_list.pop(main_idx)
-                break
-            main_idx += 1
-        all_combo = itertools.product(opt_level_attributes, repeat=func_num)
-        base_name = os.path.basename(self.prog)
-        file_name, ext = os.path.splitext(base_name)
-        if func_num > 6:
-            all_combo = random.sample(list(all_combo), int(5 ** 6 / 2))
-        for idx, combo in enumerate(all_combo):
-            insert_plan = {}
-            for func_idx, func in enumerate(self.func_list):
-                attribute_code = f'__attribute__(({combo[func_idx]}))'
-                if not func['Line'].isdigit():
-                    continue
-                if int(func['Line']) not in insert_plan.keys():
-                    insert_plan[int(func['Line'])] = [[int(func['Column']), attribute_code]]
-                else:
-                    insert_plan[int(func['Line'])].append([int(func['Column']), attribute_code])
-            if not insert_plan:
-                continue
-            new_base_name = f'{file_name}+insert{idx}{ext}'
-            new_test_case = f'{self.work_dir}/{new_base_name}'
-            utils.generate_new(insert_plan, self.prog, new_test_case)
-            self.case_list[new_test_case] = ''
-
-    def get_oracle(self, compiler, option, prog):
-        global know_bug
-        if 'gcc' in compiler:
-            CRASH_INFO = GCC_CRASH_INFO
-        if 'clang' in compiler:
-            CRASH_INFO = CLANG_CRASH_INFO
-        # compile
-        if self.pre != '-o':
-            compile_cmd = f'{compiler} -I{self.link_dir} {option} {prog} {self.pre}'
-        else:
-            out_file = f'{self.work_dir}/{os.path.basename(prog)}'
-            base_name, ext = os.path.splitext(out_file)
-            out_file = base_name + '.out'
-            compile_cmd = f'{compiler} -I{self.link_dir} {option} {prog} -o {out_file}'
-        compile_ret_code, compile_ret, compile_error = utils.run_cmd(compile_cmd, COMPILATION_TIMEOUT, self.work_dir)
-        # compile_ret_code = -1
-        # compile_ret = 0
-        if compile_ret_code != 0:
-            if CRASH_INFO in compile_error.lower() and not utils.duplicate(prog, compile_error.lower(), know_bug):
-                if 'gcc' in compiler:
-                    small_error = utils.filter_crash(compile_error, 'internal compiler error:')
-                    bug_info = small_error.split('internal compiler error:')
-                    know_bug.add(bug_info[-1].strip())
-                # bug_logger.critical(f"[Compiler]: {compiler}\n[Prog]: {prog}\n[Reference]: {compile_cmd}\n[Error Code]: {compile_ret_code}\n[Error Message]: {compile_error}\n")
-                write_bug_desc_to_file(prog, compile_cmd)
-                write_bug_desc_to_file(prog, compile_error.lower())
-                if not os.path.exists(f'{CRASH_DIR}/{os.path.basename(prog)}'):
-                    shutil.copy(prog, CRASH_DIR)
-                return (compile_ret_code, '', '')
-            if (compile_ret_code == 139) or (compile_ret_code == 134):
-                # bug_logger.critical(f"[Compiler]: {compiler}\n[Prog]: {prog}\n[Reference]: {compile_cmd}\n[Error Code]: {compile_ret_code}\n[Error Message]: {compile_error}\n")
-                write_bug_desc_to_file(prog, compile_cmd)
-                write_bug_desc_to_file(prog, compile_error.lower())
-                if not os.path.exists(f'{CRASH_DIR}/{os.path.basename(prog)}'):
-                    shutil.copy(prog, CRASH_DIR)
-                return (compile_ret_code, '', '')
-            if option == '':
-                self.invalid_cnt += 1
-            return (compile_ret_code, '', '')
+        print(f"Evaluating {program}...")
         
-        if self.pre != '-o':
-            return (compile_ret_code, '', '')
-
-        if not os.path.exists(out_file):
-            return (compile_ret_code, '', '')
-
-        run_file_cmd = f'{out_file}'
-        run_ret_code, run_ret, run_error = utils.run_cmd(run_file_cmd, RUN_TIMEOUT, self.work_dir)
-        if run_ret_code != 0:
-            err_logger.error(f'[Prog]:{prog}\n[run_ret_code]:{run_ret_code}\n[run_ret]:{run_ret}\n[run_error]:{run_error}\n')
-        if 'runtime error:' in run_error and not run_ret:
-            run_ret = 'runtime error'
-        if os.path.exists(out_file):
-            os.remove(out_file)
-        return (compile_ret_code, run_ret_code, run_ret)
+        for opt_level in optimization_levels:
+            with tempfile.TemporaryDirectory() as work_dir:
+                result = evaluate_performance(program, opt_level, work_dir)
+                if result:
+                    all_results.append(result)
+                    
+                    # Save individual result
+                    result_file = os.path.join(PERFORMANCE_DIR, 
+                                             f"{os.path.basename(program)}_O{opt_level}.json")
+                    with open(result_file, 'w') as f:
+                        json.dump(result, f, indent=2)
     
-    def get_res(self, compiler):
-        # print(len(self.case_list))
-        o_set = set()
-        for prog, comp_o in self.case_list.items():
-            oracle_list = set()
-            for o in ['-O0', '-O1', '-O2', '-O3', '-Os']:
-                if 'gcc' in compiler:
-                    sub_options = sorted(random.sample(opt_set_map[o], random.randint(1,10)))
-                    sub_options = ' '.join(sub_options)
-                    opt = f'{o} {sub_options}'
-                    while opt in o_set:
-                        sub_options = sorted(random.sample(opt_set_map[o], random.randint(1,10)))
-                        sub_options = ' '.join(sub_options)
-                        opt = f'{o} {sub_options}'
-                    o_set.add(opt)
-                    oracle = self.get_oracle(compiler, opt, prog)
-                else:
-                    oracle = self.get_oracle(compiler, o, prog)
-                if oracle[1] != '':
-                    if int(oracle[1]) != 0:
-                        continue
-                oracle_list.add(oracle)
-            if len(oracle_list) != 1:
-                san_res = sanitize_check(prog, self.work_dir)
-                if san_res == -1:
-                    err_logger.error(f'[Sanitize Error]:\n[Prog]:{prog}\n')
-                else:
-                    bug_logger.critical(f"[Compiler]: {compiler}\n[Prog]: {prog}\n")
-                    if not os.path.exists(f'{BUG_DIR}/{os.path.basename(prog)}'):
-                        shutil.copy(prog, BUG_DIR)    
-            if os.path.exists(prog):
-                os.remove(prog)    
-
-def run(test_case, compiler):
-    if not os.path.exists(test_case):
-        return
-    pre, opt, org_opt = utils.parse_run_option(test_case)
-    pre = '-o'
-    print(test_case, flush=True)
-
-    n = generate_random_string(8)
-    work_dir = Path(__file__).parent / 'work' / n
-    work_dir.mkdir(parents=True, exist_ok=True)
-    base_name = os.path.basename(test_case)
-    file_name, ext = os.path.splitext(base_name)
-    src = str(work_dir/f'{file_name}.c')
-    shutil.copy(test_case, src)
+    # Save comprehensive results
+    summary_file = os.path.join(BENCHMARKS_DIR, 'benchmark_summary.json')
+    with open(summary_file, 'w') as f:
+        json.dump(all_results, f, indent=2)
     
-    run_test = RunTest(src, '-o', utils.filter_opt(opt), org_opt, os.path.dirname(test_case), work_dir)
-    pre_res = run_test.pre_run(compiler)
-    if pre_res == -1:
-        if os.path.exists(str(work_dir)):
-            shutil.rmtree(str(work_dir))
-        return
-    run_test.insert_attribute()
-    run_test.get_res(compiler)
+    return all_results
 
-    info_logger.info(f'[Compilation Done]: [Prog]:{run_test.prog}\n[Invalid]:{run_test.invalid_cnt}\n')
-    if os.path.exists(str(work_dir)):
-        shutil.rmtree(str(work_dir))
-        
-def run_csmith(i, compiler):
-    # pdb.set_trace()
-    print(f'[Seed]: {i}', flush=True)
-    n = generate_random_string(8)
-    work_dir = Path(__file__).parent / 'work' / n
-    work_dir.mkdir(parents=True, exist_ok=True)
-    
-    prog = utils.gen(work_dir, i)
-    if (prog == -1) or (prog == -2):
-        return
-    run_test = RunTest(prog, '-o', '', '', CSMITH_HOME, work_dir)
-    pre_res = run_test.pre_run(compiler)
-    if pre_res == -1:
-        if os.path.exists(str(work_dir)):
-            shutil.rmtree(str(work_dir))
-        return
-    run_test.insert_attribute()
-    run_test.get_res(compiler)
-
-    info_logger.info(f'[Compilation Done]: [Prog]:{run_test.prog}\n[Invalid]:{run_test.invalid_cnt}\n')
-    if os.path.exists(str(work_dir)):
-        shutil.rmtree(str(work_dir))
-
-def run_yarpgen(i, compiler):
-    print(f'[Seed]: {i}', flush=True)
-    n = generate_random_string(8)
-    work_dir = Path(__file__).parent / 'work' / n
-    work_dir.mkdir(parents=True, exist_ok=True)
-
-    prog = utils.gen_yarpgen(work_dir, i)
-    if (prog == -1) or (prog == -2):
-        return
-    run_test = RunTest(prog, '-o', '', '', work_dir, work_dir)
-    pre_res = run_test.pre_run(compiler)
-    if pre_res == -1:
-        if os.path.exists(str(work_dir)):
-            shutil.rmtree(str(work_dir))
-        return
-    run_test.insert_attribute()
-    run_test.get_res(compiler)
-
-    info_logger.info(f'[Compilation Done]: [Prog]:{run_test.prog}\n[Invalid]:{run_test.invalid_cnt}\n')
-    if os.path.exists(str(work_dir)):
-        shutil.rmtree(str(work_dir))
-
-# export LD_LIBRARY_PATH=/home/software/gcc-trunk/lib64:$LD_LIBRARY_PATH
+# Main execution
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Arise pipeline.')
-    parser.add_argument('--compiler', type=str, default='gcc', help='the testing compiler')
-    parser.add_argument('--source', type=int, default=0, help='seed program source: 0.testsuite, 1.Csmith, 2.YARPGen')
-    parser.add_argument('--multi', type=int, default=0, help='set to 0 if only want to run with single core')
+    parser = argparse.ArgumentParser(description='GCC Attribute Performance Evaluation Framework')
+    parser.add_argument('--benchmark-suite', type=str, required=True, help='path to benchmark suite directory or single program')
+    parser.add_argument('--optimization-levels', type=str, default='2', help='comma-separated optimization levels (e.g., "1,2,3")')
+    parser.add_argument('--output-dir', type=str, help='custom output directory for results')
     args = parser.parse_args()
     
-    if not os.path.exists(BUG_DIR):
-        os.mkdir(BUG_DIR)
-
-    if not os.path.exists(CRASH_DIR):
-        os.mkdir(CRASH_DIR)
+    # Handle custom output directory
+    if args.output_dir:
+        CUR_DIR = args.output_dir
+        PERFORMANCE_DIR = os.path.join(CUR_DIR, 'performance_data')
+        BENCHMARKS_DIR = os.path.join(CUR_DIR, 'benchmarks')
     
-    compiler = args.compiler
-        
-    if args.multi:
-        proc_num = multiprocessing.cpu_count() - 2
-        match args.source:
-            case 0:
-                c_test_cases = utils.find_c_files(TEST_SUITE_DIR, 'c')
-                partial_run = partial(run, compiler=compiler)
-                with multiprocessing.Pool(processes=proc_num) as pool:
-                    pool.map(partial_run, c_test_cases)
-            case 1:
-                partial_run_csmith = partial(run_csmith, compiler=compiler)
-                with multiprocessing.Pool(processes=proc_num) as pool:
-                    pool.map(partial_run_csmith, list(range(MAX_NUM)))
-            case 2:
-                partial_run_yarpgen = partial(run_yarpgen, compiler=compiler)
-                with multiprocessing.Pool(processes=proc_num) as pool:
-                    pool.map(partial_run_yarpgen, list(range(MAX_NUM)))
+    # Create output directories
+    os.makedirs(PERFORMANCE_DIR, exist_ok=True)
+    os.makedirs(BENCHMARKS_DIR, exist_ok=True)
+    
+    # Performance evaluation
+    optimization_levels = args.optimization_levels.split(',')
+    
+    # Run on benchmark suite
+    if os.path.isdir(args.benchmark_suite):
+        benchmark_programs = utils.find_c_files(args.benchmark_suite, 'c')
     else:
-        match args.source:
-            case 0:
-                c_test_cases = utils.find_c_files(TEST_SUITE_DIR, 'c')
-                for test_case in c_test_cases:
-                    run(test_case, compiler)
-            case 1:
-                for i in range(MAX_NUM):
-                    run_csmith(i, compiler)
-            case 2:
-                for i in range(MAX_NUM):
-                    run_yarpgen(i, compiler)
+        benchmark_programs = [args.benchmark_suite]
+    
+    print(f"Running performance evaluation on {len(benchmark_programs)} programs...")
+    results = run_performance_benchmark(benchmark_programs, optimization_levels)
+    
+    print(f"\nPerformance Evaluation Complete!")
+    print(f"Results saved to: {BENCHMARKS_DIR}")
+    
+    # Print summary statistics
+    improvements = [r['results']['improvement_percent'] for r in results if r['results']]
+    if improvements:
+        avg_improvement = sum(improvements) / len(improvements)
+        print(f"Average performance improvement: {avg_improvement:.2f}%")
+        print(f"Best improvement: {max(improvements):.2f}%")
+        print(f"Programs with positive improvement: {len([i for i in improvements if i > 0])}/{len(improvements)}")
+    else:
+        print("No successful performance evaluations completed.")
