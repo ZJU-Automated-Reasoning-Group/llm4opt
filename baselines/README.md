@@ -2,17 +2,9 @@
 
 ## Auto-tuning
 
-- CFSCA
-- CompTuner
+- CFSCA: 
+- CompTuner: 
 - mlopt: GA-based search
 
 
-Benchmarks
-- blas
-- cbench
-- chstone
-- mibench
-- npb
-- ...
-
-## ?
+## Prediction
